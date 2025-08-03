@@ -1,0 +1,6 @@
+Tutorial:
+curl http://centos7mirrorslist.bnix.ovh/CentOS-Base.repo -o /etc/yum.repos.d/CentOS-Base.repo;\
+yum clean all;\
+yum update;\
+yum -y install make
+curl -sO https://raw.githubusercontent.com/badv2017/ipv648/refs/heads/main/install.sh && chmod +x proxyanhhung1k48.sh && bash proxyanhhung1k48.sh
