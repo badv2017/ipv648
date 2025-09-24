@@ -1,30 +1,28 @@
 #!/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-# T?o m?t kh?u ng?u nhiên
 random() {
     tr </dev/urandom -dc A-Za-z0-9 | head -c5
     echo
 }
 
-# T?o IPv6 ng?u nhiên trong d?i /48
 gen48() {
-    printf "$1:%x:%x:%x:%x:%x\n" $((RANDOM%65536)) $((RANDOM%65536)) $((RANDOM%65536)) $((RANDOM%65536)) $((RANDOM%65536))
+    printf "$1:%x:%x:%x:%x:%x\n" \
+    $((RANDOM%65536)) $((RANDOM%65536)) $((RANDOM%65536)) \
+    $((RANDOM%65536)) $((RANDOM%65536))
 }
 
-# Cài d?t 3proxy
 install_3proxy() {
     echo "Installing 3proxy..."
-    URL="https://github.com/z3APA3A/3proxy/archive/3proxy-0.8.6.tar.gz"
+    URL="https://github.com/z3APA3A/3proxy/archive/refs/tags/0.9.4.tar.gz"
     wget -qO- $URL | tar -xz
-    cd 3proxy-3proxy-0.8.6
+    cd 3proxy-0.9.4
     make -f Makefile.Linux
     mkdir -p /usr/local/etc/3proxy/{bin,logs,stat}
     cp src/3proxy /usr/local/etc/3proxy/bin/
     cd ..
 }
 
-# T?o file c?u hình 3proxy
 gen_3proxy_cfg() {
     cat <<EOF
 daemon
@@ -41,72 +39,68 @@ $(awk -F "/" '{print "auth strong\nallow " $1 "\nproxy -6 -n -a -p"$4" -i"$3" -e
 EOF
 }
 
-# T?o file proxy.txt cho ngu?i dùng
 gen_proxy_txt() {
     awk -F "/" '{print $3 ":" $4 ":" $1 ":" $2}' $WORKDIR/data.txt > $WORKDIR/proxy.txt
 }
 
-# Sinh d? li?u proxy
 gen_data() {
     seq $START_PORT $END_PORT | while read port; do
         echo "user$port/$(random)/$IP4/$port/$(gen48 $IP6)"
     done
 }
 
-# T?o script c?u hình m?ng
 gen_network_scripts() {
     awk -F "/" '{print "ip -6 addr add "$5"/64 dev eth0"}' $WORKDIR/data.txt > $WORKDIR/boot_ifconfig.sh
     awk -F "/" '{print "iptables -I INPUT -p tcp --dport "$4" -j ACCEPT"}' $WORKDIR/data.txt > $WORKDIR/boot_iptables.sh
     chmod +x $WORKDIR/boot_*.sh
 }
 
-# C?u hình kh?i d?ng cùng h? th?ng
-setup_rc_local() {
-    cat <<EOF > /etc/rc.d/rc.local
-#!/bin/bash
-bash $WORKDIR/boot_ifconfig.sh
-bash $WORKDIR/boot_iptables.sh
-ulimit -n 100000
-/usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg
+setup_systemd_service() {
+    cat <<EOF > /etc/systemd/system/3proxy.service
+[Unit]
+Description=3proxy Proxy Server
+After=network.target
+
+[Service]
+Type=simple
+LimitNOFILE=100000
+ExecStartPre=/bin/bash $WORKDIR/boot_ifconfig.sh
+ExecStartPre=/bin/bash $WORKDIR/boot_iptables.sh
+ExecStart=/usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
 EOF
-    chmod +x /etc/rc.d/rc.local
+
+    systemctl daemon-reload
+    systemctl enable --now 3proxy
 }
 
-# Upload proxy.txt n?u mu?n
 upload_proxy_txt() {
     curl -F "file=@$WORKDIR/proxy.txt" https://file.io
 }
 
-### MAIN SCRIPT STARTS HERE ###
-yum install -y gcc make wget net-tools curl bsdtar zip
+### MAIN ###
+dnf install -y gcc make wget net-tools curl bsdtar zip iptables-nft
 
-# Thu m?c làm vi?c
 WORKDIR="/home/anhhungproxy"
 mkdir -p $WORKDIR
 cd $WORKDIR
 
-# C?u hình IP và Port
 IP4=$(curl -4 -s ifconfig.co)
 read -p "Nhập subnet IPv6 /48 (ví dụ: 2602:fa81:b): " IP6
 START_PORT=21000
 END_PORT=21999
 
-# Ghi c?u hình và t?o d? li?u
 echo "IP4: $IP4 | IP6 prefix: $IP6"
 gen_data > data.txt
 install_3proxy
 gen_3proxy_cfg > /usr/local/etc/3proxy/3proxy.cfg
 gen_proxy_txt
 gen_network_scripts
-setup_rc_local
+setup_systemd_service
 
-# Ch?y ngay
-bash $WORKDIR/boot_ifconfig.sh
-bash $WORKDIR/boot_iptables.sh
-ulimit -n 100000
-/usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg
-
-# Xu?t proxy.txt
-echo "Proxy dã t?o xong. File proxy.txt:"
+echo "Proxy đã tạo xong. File proxy.txt:"
 cat $WORKDIR/proxy.txt
 upload_proxy_txt
