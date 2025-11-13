@@ -3,7 +3,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # Tạo mật khẩu ngẫu nhiên mạnh hơn (16 ký tự)
 random() {
-    openssl rand -base64 24 | tr -dc A-Za-z0-9 | head -c16
+    tr </dev/urandom -dc A-Za-z0-9 | head -c16
     echo
 }
 
@@ -18,16 +18,23 @@ install_3proxy() {
     echo "Đang cài đặt 3proxy..."
     URL="https://github.com/z3APA3A/3proxy/archive/refs/tags/0.9.4.tar.gz"
     wget -qO- $URL | tar -xz
+    if [ ! -d "3proxy-0.9.4" ]; then
+        echo "❌ Lỗi: Không thể tải 3proxy"
+        exit 1
+    fi
     cd 3proxy-0.9.4
+    echo "Đang compile 3proxy..."
     make -f Makefile.Linux
     if [ $? -ne 0 ]; then
-        echo "Lỗi: Không thể compile 3proxy"
+        echo "❌ Lỗi: Không thể compile 3proxy"
+        echo "Kiểm tra lại gcc: $(which gcc)"
         exit 1
     fi
     mkdir -p /usr/local/etc/3proxy/{bin,logs,stat}
     cp src/3proxy /usr/local/etc/3proxy/bin/
-    cd ..
-    echo "Cài đặt 3proxy thành công!"
+    chmod +x /usr/local/etc/3proxy/bin/3proxy
+    cd $WORKDIR
+    echo "✅ Cài đặt 3proxy thành công!"
 }
 
 # Tạo file cấu hình 3proxy
@@ -78,17 +85,15 @@ IFCONFIG_SCRIPT
     awk -F "/" '{print "ip -6 addr add "$5"/64 dev eth0"}' $WORKDIR/data.txt >> $WORKDIR/boot_ifconfig.sh
     
     # Script cấu hình iptables
-    cat <<'IPTABLES_SCRIPT' > $WORKDIR/boot_iptables.sh
+    cat <<IPTABLES_SCRIPT > $WORKDIR/boot_iptables.sh
 #!/bin/bash
 # Xóa rules cũ
-iptables -D INPUT -p tcp --dport START_PORT:END_PORT -j ACCEPT 2>/dev/null || true
+iptables -D INPUT -p tcp --dport $START_PORT:$END_PORT -j ACCEPT 2>/dev/null || true
 # Thêm rule mới
-iptables -I INPUT -p tcp --dport START_PORT:END_PORT -j ACCEPT
+iptables -I INPUT -p tcp --dport $START_PORT:$END_PORT -j ACCEPT
+# Lưu iptables
+service iptables save 2>/dev/null || true
 IPTABLES_SCRIPT
-    
-    # Thay thế START_PORT và END_PORT
-    sed -i "s/START_PORT/$START_PORT/g" $WORKDIR/boot_iptables.sh
-    sed -i "s/END_PORT/$END_PORT/g" $WORKDIR/boot_iptables.sh
     
     chmod +x $WORKDIR/boot_*.sh
 }
@@ -100,7 +105,7 @@ cleanup_old_config() {
     systemctl disable 3proxy 2>/dev/null || true
     
     # Xóa các IPv6 addresses cũ
-    ip -6 addr show dev eth0 | grep -oP '(?<=inet6 )[0-9a-f:]+/64' | while read addr; do
+    ip -6 addr show dev eth0 2>/dev/null | grep -oP '(?<=inet6 )[0-9a-f:]+/64' | while read addr; do
         ip -6 addr del $addr dev eth0 2>/dev/null || true
     done
     
@@ -153,6 +158,7 @@ validate_proxy_count() {
 ### MAIN ###
 echo "======================================"
 echo "  Script tạo IPv6 Proxy Server"
+echo "  Tối ưu cho CentOS 7"
 echo "======================================"
 echo ""
 
@@ -162,28 +168,25 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Cài đặt các gói cần thiết
+# Cài đặt các gói cần thiết cho CentOS 7
 echo "📦 Đang cài đặt các gói cần thiết..."
-if command -v apt-get &> /dev/null; then
-    # Debian/Ubuntu
-    apt-get update > /dev/null 2>&1
-    apt-get install -y gcc make wget curl tar gzip openssl iptables > /dev/null 2>&1
-elif command -v yum &> /dev/null; then
-    # CentOS/RHEL 7
-    yum install -y gcc make wget curl tar gzip openssl iptables > /dev/null 2>&1
-elif command -v dnf &> /dev/null; then
-    # Fedora/RHEL 8+
-    dnf install -y gcc make wget curl tar gzip openssl iptables > /dev/null 2>&1
-else
-    echo "❌ Không hỗ trợ hệ điều hành này"
+yum install -y epel-release > /dev/null 2>&1
+yum groupinstall -y "Development Tools" > /dev/null 2>&1
+yum install -y gcc make wget curl tar gzip net-tools iptables iptables-services > /dev/null 2>&1
+
+# Kiểm tra gcc
+if ! command -v gcc &> /dev/null; then
+    echo "❌ Lỗi: gcc chưa được cài đặt"
+    echo "Thử cài đặt thủ công:"
+    echo "  yum groupinstall 'Development Tools' -y"
     exit 1
 fi
 
-# Kiểm tra gcc đã cài đặt thành công
-if ! command -v gcc &> /dev/null; then
-    echo "❌ Lỗi: Không thể cài đặt gcc"
-    exit 1
-fi
+echo "✅ gcc version: $(gcc --version | head -n1)"
+
+# Bật và khởi động iptables
+systemctl enable iptables 2>/dev/null || service iptables start 2>/dev/null
+systemctl start iptables 2>/dev/null || true
 
 # Thiết lập thư mục làm việc
 WORKDIR="/home/anhhungproxy"
@@ -191,7 +194,10 @@ mkdir -p $WORKDIR
 cd $WORKDIR
 
 # Lấy IPv4
-IP4=$(curl -4 -s ifconfig.co)
+IP4=$(curl -4 -s icanhazip.com)
+if [ -z "$IP4" ]; then
+    IP4=$(curl -4 -s ifconfig.me)
+fi
 if [ -z "$IP4" ]; then
     echo "❌ Không thể lấy địa chỉ IPv4"
     exit 1
@@ -253,7 +259,7 @@ echo "🚀 Đang khởi động dịch vụ..."
 setup_systemd_service
 
 # Chờ service khởi động
-sleep 3
+sleep 5
 
 # Kiểm tra trạng thái
 if systemctl is-active --quiet 3proxy; then
@@ -274,10 +280,12 @@ if systemctl is-active --quiet 3proxy; then
     echo "   - Kiểm tra service: systemctl status 3proxy"
     echo "   - Xem log: journalctl -u 3proxy -f"
     echo "   - Khởi động lại: systemctl restart 3proxy"
+    echo "   - Dừng service: systemctl stop 3proxy"
     echo "======================================"
 else
     echo ""
     echo "❌ LỖI: Không thể khởi động 3proxy"
     echo "Xem log: journalctl -u 3proxy -n 50"
+    echo "Hoặc chạy thử nghiệm: /usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg"
     exit 1
 fi
