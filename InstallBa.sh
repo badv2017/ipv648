@@ -164,7 +164,26 @@ fi
 
 # Cài đặt các gói cần thiết
 echo "📦 Đang cài đặt các gói cần thiết..."
-dnf install -y gcc make wget net-tools curl bsdtar zip iptables-nft openssl > /dev/null 2>&1
+if command -v apt-get &> /dev/null; then
+    # Debian/Ubuntu
+    apt-get update > /dev/null 2>&1
+    apt-get install -y gcc make wget curl tar gzip openssl iptables > /dev/null 2>&1
+elif command -v yum &> /dev/null; then
+    # CentOS/RHEL 7
+    yum install -y gcc make wget curl tar gzip openssl iptables > /dev/null 2>&1
+elif command -v dnf &> /dev/null; then
+    # Fedora/RHEL 8+
+    dnf install -y gcc make wget curl tar gzip openssl iptables > /dev/null 2>&1
+else
+    echo "❌ Không hỗ trợ hệ điều hành này"
+    exit 1
+fi
+
+# Kiểm tra gcc đã cài đặt thành công
+if ! command -v gcc &> /dev/null; then
+    echo "❌ Lỗi: Không thể cài đặt gcc"
+    exit 1
+fi
 
 # Thiết lập thư mục làm việc
 WORKDIR="/home/anhhungproxy"
