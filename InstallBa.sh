@@ -74,7 +74,21 @@ gen_data() {
 # Tạo script cấu hình mạng
 gen_network_scripts() {
     awk -F "/" '{print "ip -6 addr add "$5"/64 dev eth0"}' $WORKDIR/data.txt > $WORKDIR/boot_ifconfig.sh
-    awk -F "/" '{print "iptables -I INPUT -p tcp --dport "$4" -m conntrack --ctstate NEW -m recent --set --name proxy"$4"\niptables -I INPUT -p tcp --dport "$4" -m conntrack --ctstate NEW -m recent --update --seconds 60 --hitcount 100 --name proxy"$4" -j DROP\niptables -I INPUT -p tcp --dport "$4" -j ACCEPT"}' $WORKDIR/data.txt > $WORKDIR/boot_iptables.sh
+    
+    # Tạo iptables rules với rate limiting đơn giản hơn (dùng limit thay vì recent)
+    cat > $WORKDIR/boot_iptables.sh <<'IPTABLES_EOF'
+#!/bin/bash
+# Load modules cần thiết
+modprobe xt_connlimit 2>/dev/null
+modprobe xt_limit 2>/dev/null
+
+# Flush existing rules cho proxy ports
+iptables -D INPUT -p tcp --dport 21000:21999 -j ACCEPT 2>/dev/null
+
+IPTABLES_EOF
+    
+    awk -F "/" '{print "# Rate limit cho port "$4" (100 conn/phút)\niptables -A INPUT -p tcp --dport "$4" -m connlimit --connlimit-above 100 --connlimit-mask 32 -j REJECT --reject-with tcp-reset\niptables -A INPUT -p tcp --dport "$4" -m state --state NEW -m limit --limit 100/minute --limit-burst 50 -j ACCEPT\niptables -A INPUT -p tcp --dport "$4" -m state --state ESTABLISHED,RELATED -j ACCEPT"}' $WORKDIR/data.txt >> $WORKDIR/boot_iptables.sh
+    
     chmod +x $WORKDIR/boot_*.sh
 }
 
@@ -195,7 +209,35 @@ upload_proxy_txt() {
 
 ### MAIN SCRIPT ###
 echo "=== Cài đặt Proxy IPv6 với chống block ==="
-yum install -y gcc make wget net-tools curl bsdtar zip cronie
+
+# Cấu hình yum để sử dụng mirror nhanh hơn
+cat > /etc/yum.repos.d/CentOS-Base.repo <<'EOFR'
+[base]
+name=CentOS-$releasever - Base
+baseurl=http://mirror.centos.org/centos/$releasever/os/$arch/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+enabled=1
+
+[updates]
+name=CentOS-$releasever - Updates
+baseurl=http://mirror.centos.org/centos/$releasever/updates/$arch/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+enabled=1
+
+[extras]
+name=CentOS-$releasever - Extras
+baseurl=http://mirror.centos.org/centos/$releasever/extras/$arch/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+enabled=1
+EOFR
+
+# Clean cache và cài đặt packages cần thiết (bỏ bsdtar vì không cần thiết)
+yum clean all
+yum makecache fast
+yum install -y gcc make wget net-tools curl zip cronie tar gzip
 
 WORKDIR="/home/anhhungproxy"
 mkdir -p $WORKDIR
